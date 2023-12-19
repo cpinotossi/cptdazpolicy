@@ -1,0 +1,52 @@
+{
+    "properties": {
+      "displayName": "cptdazpolicy",
+      "policyType": "Custom",
+      "mode": "Indexed",
+      "description": "Deny deletion of Storage Account",
+      "metadata": {
+        "category": "cptdazpolicy",
+        "createdBy": "842e630f-0d53-45be-a9d8-abc4bf36076c",
+        "createdOn": "2023-09-28T06:28:21.6860418Z",
+        "updatedBy": "842e630f-0d53-45be-a9d8-abc4bf36076c",
+        "updatedOn": "2023-09-28T06:33:14.781516Z"
+      },
+      "parameters": {},
+      "policyRule": {
+        "if": {
+          "allOf": [
+            {
+              "field": "type",
+              "equals": "Microsoft.Storage/storageAccounts"
+            },
+            {
+              "field": "tags.env",
+              "equals": "prod"
+            }
+          ]
+        },
+        "then": {
+          "effect": "DenyAction",
+          "details": {
+            "actionNames": [
+              "delete"
+            ],
+            "cascadeBehaviors": {
+              "resourceGroup": "deny"
+            }
+          }
+        }
+      }
+    },
+    "id": "/subscriptions/f474dec9-5bab-47a3-b4d3-e641dac87ddb/providers/Microsoft.Authorization/policyDefinitions/b8d151f6-4271-4b63-b0fb-f452a30895ed",
+    "type": "Microsoft.Authorization/policyDefinitions",
+    "name": "b8d151f6-4271-4b63-b0fb-f452a30895ed",
+    "systemData": {
+      "createdBy": "ga@myedge.org",
+      "createdByType": "User",
+      "createdAt": "2023-09-28T06:28:21.6390703Z",
+      "lastModifiedBy": "ga@myedge.org",
+      "lastModifiedByType": "User",
+      "lastModifiedAt": "2023-09-28T06:33:14.7190298Z"
+    }
+  }
