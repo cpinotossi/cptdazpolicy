@@ -1,0 +1,32 @@
+{
+    "if": {
+        "allOf": [
+            {
+                "field": "type",
+                "equals": "Microsoft.Network/routeTables/routes"
+            },
+            {
+                "anyOf": [
+                    {
+                        "not": {
+                            "field": "Microsoft.Network/routeTables/routes[*].addressPrefix",
+                            "notEquals": "0.0.0.0/0"
+                        }
+                    },
+                    {
+                        "field": "Microsoft.Network/routeTables/routes/addressPrefix",
+                        "equals": "0.0.0.0/0"
+                    }
+                ]
+            }
+        ]
+    },
+    "then": {
+        "effect": "denyAction",
+        "details": {
+            "actionNames": [
+                "delete"
+            ]
+        }
+    }
+}

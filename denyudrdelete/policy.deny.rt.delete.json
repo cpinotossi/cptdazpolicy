@@ -1,0 +1,18 @@
+{
+    "if": {
+        "allOf": [
+            {
+                "field": "type",
+                "equals": "Microsoft.Network/routeTables"
+            }
+        ]
+    },
+    "then": {
+        "effect": "denyAction",
+        "details": {
+            "actionNames": [
+                "delete"
+            ]
+        }
+    }
+}
