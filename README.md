@@ -6,7 +6,7 @@ sudo hwclock -s
 sudo ntpdate time.windows.com
 ~~~
 
-## Create Blob Storage
+## Create Blob Storage (WORK IN PROGRESS)
 
 ~~~bash
 prefix=cptdazpolicy
@@ -22,11 +22,239 @@ az storage account show -n $prefix -g $prefix --query networkRuleSet.ipRules
 # az group delete -g $prefix -l $location
 ~~~
 
-## Create Append Policy
-We like to add one more IP to our storage account ip ACL.
-~~~bash
 
+## How to avoid UDR deletion
+
+We will protect "force tunneling UDR" and "Route Table" via Azure Policy.
+
+
+Create Infrastructure:
+
+~~~bash
+cd denyudrdelete
+prefix=cptdazpolicy
+location=germanywestcentral
+currentUserObjectId=$(az ad signed-in-user show --query id -o tsv)
+adminPassword='demo!pass123!'
+adminUsername='chpinoto'
+myip=$(curl ifconfig.io)
+subId=$(az account show --query id -o tsv)
+az deployment sub create -n $prefix -l $location --template-file main.bicep -p subscriptionId=$subId prefix=$prefix currentUserObjectId=$currentUserObjectId
 ~~~
+
+### Test force tunneling UDR:
+
+~~~bash
+# show effective routes of nic
+az network nic show-effective-route-table -g $prefix -n ${prefix}1 -o table
+~~~
+
+Source    State    Address Prefix    Next Hop Type     Next Hop IP
+--------  -------  ----------------  ----------------  -------------
+Default   Active   10.0.0.0/16       VnetLocal
+Default   Active   10.1.0.0/16       VNetPeering
+Default   Invalid  0.0.0.0/0         Internet
+User      Active   0.0.0.0/0         VirtualAppliance  10.1.0.4
+
+
+~~~bash
+# show all routes
+az network route-table route list -g $prefix --route-table-name $prefix -o table
+~~~
+
+AddressPrefix    HasBgpOverride    Name            NextHopIpAddress    NextHopType       ProvisioningState    ResourceGroup
+---------------  ----------------  --------------  ------------------  ----------------  -------------------  ---------------
+0.0.0.0/0        False             forceTunneling  10.1.0.4            VirtualAppliance  Succeeded            cptdazpolicy
+
+
+~~~bash
+# get firewall public ip
+az network public-ip show -g $prefix -n ${prefix}fw -o tsv --query ipAddress # 4.184.94.213
+# send curl request via serial console of vm via azure cli
+az vm run-command invoke -g $prefix -n ${prefix}1 --command-id RunShellScript --scripts 'curl https://ifconfig.io' 
+~~~
+
+Our curl request has been send via the firewall public ip 4.184.94.213
+~~~json
+{
+  "value": [
+    {
+      "code": "ProvisioningState/succeeded",
+      "displayStatus": "Provisioning succeeded",
+      "level": "Info",
+      "message": "Enable succeeded: \n[stdout]\n4.184.94.213\n\n[stderr]\n  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100    13  100    13    0     0     31      0 --:--:-- --:--:-- --:--:--    31\n",
+      "time": null
+    }
+  ]
+}
+~~~
+
+### Create policy to protect force tunneling UDR.
+
+~~~bash
+# list all custom policies under current subscription
+az policy definition list --subscription $subId --query "[?policyType=='Custom'].displayName" -o table
+# create new policy to protect force tunneling UDR
+az policy definition create --name "DenyUDRDelete" --display-name "DenyUDRDelete" --description "Deny UDR Delete " --rules policy.deny.udr.delete.json --mode All
+# show policy
+az policy definition show --name "DenyUDRDelete" | sed 's|/subscriptions/.*/providers||g'
+~~~
+
+~~~json
+{
+  "description": "Deny UDR Delete ",
+  "displayName": "DenyUDRDelete",
+  "id": "/Microsoft.Authorization/policyDefinitions/DenyUDRDelete",
+  "metadata": {
+    "createdBy": "842e630f-0d53-45be-a9d8-abc4bf36076c",
+    "createdOn": "2023-12-20T09:35:25.1693585Z",
+    "updatedBy": null,
+    "updatedOn": null
+  },
+  "mode": "Indexed",
+  "name": "DenyUDRDelete",
+  "parameters": null,
+  "policyRule": {
+    "if": {
+      "allOf": [
+        {
+          "equals": "Microsoft.Network/routeTables/routes",
+          "field": "type"
+        },
+        {
+          "anyOf": [
+            {
+              "not": {
+                "field": "Microsoft.Network/routeTables/routes[*].addressPrefix",
+                "notEquals": "0.0.0.0/0"
+              }
+            },
+            {
+              "equals": "0.0.0.0/0",
+              "field": "Microsoft.Network/routeTables/routes/addressPrefix"
+            }
+          ]
+        }
+      ]
+    },
+    "then": {
+      "details": {
+        "actionNames": [
+          "delete"
+        ]
+      },
+      "effect": "denyAction"
+    }
+  },
+  "policyType": "Custom",
+  "systemData": {
+    "createdAt": "2023-12-20T09:35:25.138715+00:00",
+    "createdBy": "ga@myedge.org",
+    "createdByType": "User",
+    "lastModifiedAt": "2023-12-20T09:35:25.138715+00:00",
+    "lastModifiedBy": "ga@myedge.org",
+    "lastModifiedByType": "User"
+  },
+  "type": "Microsoft.Authorization/policyDefinitions"
+}
+~~~
+
+### Protect our force tunnel UDR via Azure Policy
+
+~~~bash
+# assign policy
+az policy assignment create --name "DenyUDRDelete" --display-name "Deny UDR Delete" --policy "DenyUDRDelete" --scope "/subscriptions/$subId/resourceGroups/$prefix"
+# I can see the assignment via the portal but not via azure cli
+az policy assignment list --scope "/subscriptions/$subId" # not working
+az policy assignment show --name "DenyUDRDelete" --scope "/subscriptions/$subId" # not working
+az policy assignment list -o table # not working
+az policy assignment list --query "[?name=='DenyUDRDelete']" -o table # not working
+~~~
+
+### Try to delete UDR via Azure CLI
+
+~~~bash
+# delete route rule via azure cli
+az network route-table route delete -g $prefix --route-table-name $prefix -n forceTunneling # Result (RequestDisallowedByPolicy) Deletion of resource 'forceTunneling' was disallowed by policy. Policy identifiers: '[{"policyAssignment":{"name":"Deny UDR Delete","id":"
+az network route-table route list -g $prefix --route-table-name $prefix -o table # force tunneling route is still there
+~~~
+
+### Protect our Route Table via Azure Policy
+
+~~~bash
+# create new policy to protect force tunneling UDR
+az policy definition create --name "DenyRTDelete" --display-name "DenyRTDelete" --description "Deny Route Table Delete " --rules policy.deny.rt.delete.json --mode All
+# list all custom policies under current subscription
+az policy definition list --subscription $subId --query "[?policyType=='Custom'].displayName" -o table
+# assign policy
+az policy assignment create --name "DenyRTDelete" --display-name "Deny RT Delete" --policy "DenyRTDelete" --scope "/subscriptions/$subId/resourceGroups/$prefix"
+~~~
+
+### Try to delete Route Table via Azure CLI
+
+~~~bash
+az network route-table delete -g $prefix -n $prefix # Result: (RequestDisallowedByPolicy) Deletion of resource 'cptdazpolicy' was disallowed by policy. Policy identifiers: '[{"policyAssignment":{"name":"Deny RT Delete"
+~~~
+
+### Cleanup (WORK IN PROGRESS)
+
+~~~bash
+az policy definition delete --name "Deny UDR Delete" --verbose
+~~~
+
+## Misc
+
+### Azure CLI
+
+Find all ip configurations of our subnet
+~~~bash
+# get subnet ipconfigurations
+az rest --method get --uri https://management.azure.com/subscriptions/$subId/resourceGroups/$prefix/providers/Microsoft.Network/virtualNetworks/$prefix/subnets/$prefix?api-version=2021-02-01 | sed 's|/subscriptions/.*/providers||g'
+~~~
+
+~~~json
+{
+  "etag": "W/\"4b29ebdb-d37d-4560-8fa9-33c83cc17ef3\"",
+  "id": "/Microsoft.Network/virtualNetworks/cptdazpolicy/subnets/cptdazpolicy",
+  "name": "cptdazpolicy",
+  "properties": {
+    "addressPrefix": "10.0.0.0/24",
+    "delegations": [],
+    "ipConfigurations": [
+      {
+        "id": "/Microsoft.Network/networkInterfaces/CPTDAZPOLICY/ipConfigurations/CPTDAZPOLICY"
+      }
+    ],
+    "privateEndpointNetworkPolicies": "Disabled",
+    "privateLinkServiceNetworkPolicies": "Enabled",
+    "provisioningState": "Succeeded",
+    "routeTable": {
+      "id": "/Microsoft.Network/routeTables/cptdazpolicy"
+    }
+  },
+  "type": "Microsoft.Network/virtualNetworks/subnets"
+}
+~~~
+
+~~~json
+{
+  "etag": "W/\"e965fda5-34ba-460c-8d70-77e140ddff5c\"",
+  "id": "/Microsoft.Network/networkInterfaces/cptdazpolicy/ipConfigurations/cptdazpolicy",
+  "name": "cptdazpolicy",
+  "properties": {
+    "primary": true,
+    "privateIPAddress": "10.0.0.4",
+    "privateIPAddressVersion": "IPv4",
+    "privateIPAllocationMethod": "Static",
+    "provisioningState": "Succeeded",
+    "subnet": {
+      "id": "/Microsoft.Network/virtualNetworks/cptdazpolicy/subnets/cptdazpolicy"
+    }
+  },
+  "type": "Microsoft.Network/networkInterfaces/ipConfigurations"
+}
+~~~
+
 
 
 ## Misc
@@ -68,9 +296,11 @@ git remote add origin https://github.com/cpinotossi/cptdazpolicy.git
 git remote -v # list remotes
 git status
 git add .
-git commit -m"init"
+git commit -m"protect dns via policy"
 git push origin main
 git add .gitignore
+gh api repos/{owner}/{repo} --jq '.private'
+
 
 # Add Azure DevOps as remote
 git remote rename origin mslearning
