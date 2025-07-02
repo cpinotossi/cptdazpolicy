@@ -1,0 +1,22 @@
+{
+    "if": {
+        "allOf": [
+            {
+                "field": "type",
+                "equals": "Microsoft.Network/virtualNetworks"
+            },
+            {
+                "field": "tags.Network-Type",
+                "exists": "true"
+            }
+        ]
+    },
+    "then": {
+        "effect": "denyAction",
+        "details": {
+            "actionNames": [
+                "delete"
+            ]
+        }
+    }
+}
