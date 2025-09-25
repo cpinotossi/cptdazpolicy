@@ -1,5 +1,8 @@
 misc/
 logs/
+dine.fast/activity.log.json
+denytagdelete/terraform.tfstate
+denytagdelete/terraform.tfstate.backup
 
 # Terraform best practices
 *.tfstate
