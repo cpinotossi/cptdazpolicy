@@ -1,27 +1,102 @@
 # Azure Policy Demo
 
-## wsl fix
-~~~bash
-sudo hwclock -s
-sudo ntpdate time.windows.com
+
+## Protoect Azure Resource Tags via Policy
+
+~~~powershell
+$prefix="cptdazpolicy"
+$location="germanywestcentral"
+$currentUserObjectId=az ad signed-in-user show --query id -o tsv
+$subId = (Get-Content -Raw -Path "terraform.tfvars.json" | ConvertFrom-Json).subscription_id
+az account set --subscription $subId 
+mkdir denytagdelete
+cd denytagdelete
+tf init
+tf apply --auto-approve
+az network vnet show -g $prefix -n $prefix --query tags
 ~~~
 
-## Create Blob Storage (WORK IN PROGRESS)
+### Create policy to protect force tunneling UDR.
 
 ~~~bash
-prefix=cptdazpolicy
-location=germanywestcentral
-currentUserObjectId=$(az ad signed-in-user show --query id -o tsv)
-adminPassword='demo!pass123!'
-adminUsername='chpinoto'
-myip=$(curl ifconfig.io)
-az deployment sub create -n $prefix -l $location --template-file deploy.bicep -p myobjectid=$myobjectid myip=$myip prefix=$prefix
-# Verify IP ACL
-az storage account show -n $prefix -g $prefix --query networkRuleSet.ipRules
-
-# az group delete -g $prefix -l $location
+# list all custom policies under current subscription
+az policy definition list --subscription $subId --query "[?policyType=='Custom'].displayName" -o table
+# create new policy to protect force tunneling UDR
+az policy definition create --name "DenyTagDelete" --display-name "DenyTagDelete" --description "Deny Tag Delete " --rules policy.deny.tag.delete.json --mode Indexed
+# show policy
+az policy definition show --name "DenyTagDelete"
 ~~~
 
+~~~json
+{
+  "description": "Deny Tag Delete ",
+  "displayName": "DenyTagDelete",
+  "id": "/subscriptions/65668fbe-24d6-410e-b9b7-b9e52a499caf/providers/Microsoft.Authorization/policyDefinitions/DenyTagDelete",
+  "metadata": {
+    "createdBy": "c1a139f7-6a1c-4c45-ae43-33c9b758e9c3",
+    "createdOn": "2025-07-02T12:56:39.0268049Z",
+    "updatedBy": null,
+    "updatedOn": null
+  },
+  "mode": "Indexed",
+  "name": "DenyTagDelete",
+  "parameters": null,
+  "policyRule": {
+    "if": {
+      "allOf": [
+        {
+          "equals": "Microsoft.Network/virtualNetworks",
+          "field": "type"
+        },
+        {
+          "exists": "true",
+          "field": "tags.Network-Type"
+        }
+      ]
+    },
+    "then": {
+      "details": {
+        "actionNames": [
+          "delete"
+        ]
+      },
+      "effect": "denyAction"
+    }
+  },
+  "policyType": "Custom",
+  "systemData": {
+    "createdAt": "2025-07-02T12:56:38.985942+00:00",
+    "createdBy": "ga1@cptdx.net",
+    "createdByType": "User",
+    "lastModifiedAt": "2025-07-02T12:56:38.985942+00:00",
+    "lastModifiedBy": "ga1@cptdx.net",
+    "lastModifiedByType": "User"
+  },
+  "type": "Microsoft.Authorization/policyDefinitions"
+}
+~~~
+
+### Protect our tag via Azure Policy
+
+~~~bash
+# assign policy
+az policy assignment create --name "DenyTagDelete" --display-name "Deny Tag Delete" --policy "DenyTagDelete" --scope "/subscriptions/$subId/resourceGroups/$prefix"
+az policy assignment show --name "DenyTagDelete" --scope "/subscriptions/$subId/resourceGroups/$prefix"
+~~~
+
+### Try to delete Tag via Azure CLI
+
+~~~bash
+# delete tag via azure cli
+az network vnet update -g $prefix -n $prefix --set tags.Network-Type="Hub" # Does not deny, policy seems not to apply
+az network vnet update -g $prefix -n $prefix --set tags.Network-Type="Spoke"
+# delete a tag from Azure VNet via Azure CLI
+az network vnet update -g $prefix -n $prefix --remove tags.Network-Type
+~~~
+
+### Conclusion
+
+Not possible to protect tag modification or deletion via Azure Policy Action DenyAction.
 
 ## How to avoid UDR deletion
 
