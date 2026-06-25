@@ -132,6 +132,25 @@ So for the common case the deny assignment is fully effective **with no custom r
 
 > Note: user-assigned deny assignments via `2024-07-01-preview` / `New-AzDenyAssignment` are a **preview** capability. The `audit` effect is likewise preview and may still enforce in some tenants. Validate the behaviour in your target tenant before relying on it.
 
+### Best for platform vs application teams: scope separation with a management group
+
+You can close the Owner bypass **without** a custom role and **without** a system-protected deny assignment by putting the deny assignment on a scope the workload team does not control. Azure RBAC and deny assignments **inherit downward (management group -> subscription -> resource group -> resource) but never upward**.
+
+```
+Management Group  (platform team = Owner)   <-- deny assignment lives HERE
+   └─ Subscription  (application team = Owner)
+        └─ Resource Group
+             └─ Route Table (UDR)            <-- protected by inheritance
+```
+
+- The **platform team** is `Owner` on the **management group** and deploys the deny assignment there ([denyassignment.mg.bicep](denyassignment.mg.bicep), `targetScope = 'managementGroup'`).
+- The **application team** is `Owner` on a **child subscription only**.
+- The MG-scoped deny **applies to the route table** through inheritance, so the application team cannot modify or delete the UDR.
+- The deny assignment **resource lives on the management group**. Deleting it needs `denyAssignments/delete` **at the MG scope**, which the application team does not have - its delete attempt fails with `AuthorizationFailed`. The bypass is gone.
+- The platform team (Owner on the MG) retains full control of its own guardrail.
+
+This is the recommended pattern when a platform team hands a subscription to an application team but must keep certain resources (route tables, peerings, etc.) immutable. Step 7 of the notebook proves it live: `test1` (subscription Owner) is blocked from the route change **and** cannot delete the MG-scoped deny assignment.
+
 ## Files
 
 | File | Purpose |
@@ -140,5 +159,6 @@ So for the common case the deny assignment is fully effective **with no custom r
 | [routetable.bicepparam](routetable.bicepparam) | Parameters for the route table |
 | [denyassignment.bicep](denyassignment.bicep) | Deny assignment that protects the route table |
 | [denyassignment.bicepparam](denyassignment.bicepparam) | Parameters for the deny assignment |
+| [denyassignment.mg.bicep](denyassignment.mg.bicep) | Management-group-scoped deny assignment (platform/application team separation) |
 | [deny-assignment-demo.ipynb](deny-assignment-demo.ipynb) | Step-by-step walkthrough (bash + Azure CLI) |
 | [NOTES.md](NOTES.md) | Original requirement and file index |
